@@ -32,6 +32,11 @@ typedef struct _PROTECT_PROCESS_REQUEST
     UINT32 ProcessId;
 } ProtectProcessRequest, * PProtectProcessRequest;
 
+typedef struct _DELETE_FILE_REQUEST
+{
+	UNICODE_STRING FilePath;
+} DeleteFileRequest, * PDeleteFileRequest;
+
 //一些必要的结构
 typedef union _PS_PROTECTION
 {
@@ -65,6 +70,35 @@ typedef enum _PS_PROTECTED_TYPE
 	PsProtectedTypeProtected = 2
 } PS_PROTECTED_TYPE, * PPS_PROTECTED_TYPE;
 
+typedef struct _LDR_DATA_TABLE_ENTRY64
+{
+	LIST_ENTRY64 InLoadOrderLinks;
+	LIST_ENTRY64 InMemoryOrderLinks;
+	LIST_ENTRY64 InInitializationOrderLinks;
+	ULONG64 DllBase;
+	ULONG64 EntryPoint;
+	ULONG64 SizeOfImage;
+	UNICODE_STRING FullDllName;
+	UNICODE_STRING BaseDllName;
+	ULONG Flags;
+	USHORT LoadCount;
+	USHORT TlsIndex;
+	LIST_ENTRY64 HashLinks;
+	ULONG64 SectionPointer;
+	ULONG64 CheckSum;
+	ULONG64 TimeDateStamp;
+	ULONG64 LoadedImports;
+	ULONG64 EntryPointActivationContext;
+	ULONG64 PatchInformation;
+	LIST_ENTRY64 ForwarderLinks;
+	LIST_ENTRY64 ServiceTagLinks;
+	LIST_ENTRY64 StaticLinks;
+	ULONG64 ContextInformation;
+	ULONG64 OriginalBase;
+	LARGE_INTEGER LoadTime;
+} LDR_DATA_TABLE_ENTRY64, * PLDR_DATA_TABLE_ENTRY64;
+
 //自定义的IO控制码。自己定义时取0x800到0xFFF，因为0x0到0x7FF是微软保留的。
 #define IOCTL_READ_WRITE	                CTL_CODE(FILE_DEVICE_UNKNOWN, 0x999, METHOD_BUFFERED, FILE_SPECIAL_ACCESS)
 #define IOCTL_Protect_PROCESS	            CTL_CODE(FILE_DEVICE_UNKNOWN, 0x998, METHOD_BUFFERED, FILE_SPECIAL_ACCESS)
+#define IOCTL_Delete_File					CTL_CODE(FILE_DEVICE_UNKNOWN, 0x997, METHOD_BUFFERED, FILE_SPECIAL_ACCESS)

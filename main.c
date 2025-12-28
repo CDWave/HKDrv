@@ -227,6 +227,91 @@ NTSTATUS HandleProtectProcessRequest(PProtectProcessRequest Request)
 	}
 }
 
+NTSTATUS HandleForceDeleteFileRequest(PDeleteFileRequest Request)
+{
+	NTSTATUS nStatus = STATUS_SUCCESS;
+	HANDLE hFile = NULL;
+	IO_STATUS_BLOCK IoStatusBlock;
+	OBJECT_ATTRIBUTES ObjectAttributes;
+	PDEVICE_OBJECT pDeviceObject = NULL;
+	PVOID pHandleFileObject = NULL;
+
+	// 判断中断等级不大于0
+	if (KeGetCurrentIrql() > PASSIVE_LEVEL)
+	{
+		return STATUS_UNSUCCESSFUL;
+	}
+
+	if (Request->FilePath.Buffer == NULL || Request->FilePath.Length <= 0)
+	{
+		return STATUS_UNSUCCESSFUL;
+	}
+
+	__try
+	{
+		// 初始化结构
+		InitializeObjectAttributes(&ObjectAttributes, &Request->FilePath, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+
+		// 文件系统筛选器驱动程序 仅向指定设备对象下面的筛选器和文件系统发送创建请求。
+		nStatus = IoCreateFileSpecifyDeviceObjectHint(
+			&hFile,
+			SYNCHRONIZE | FILE_WRITE_ATTRIBUTES | FILE_READ_ATTRIBUTES | FILE_READ_DATA,
+			&ObjectAttributes,
+			&IoStatusBlock,
+			NULL,
+			0,
+			FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+			FILE_OPEN,
+			FILE_NON_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT,
+			0,
+			0,
+			CreateFileTypeNone,
+			0,
+			IO_IGNORE_SHARE_ACCESS_CHECK,
+			pDeviceObject);
+
+		if (!NT_SUCCESS(nStatus))
+		{
+			return STATUS_UNSUCCESSFUL;
+		}
+
+		// 在对象句柄上提供访问验证，如果可以授予访问权限，则返回指向对象的正文的相应指针。
+		nStatus = ObReferenceObjectByHandle(hFile, 0, 0, 0, &pHandleFileObject, 0);
+		if (!NT_SUCCESS(nStatus))
+		{
+			return STATUS_UNSUCCESSFUL;
+		}
+
+		// 镜像节对象设置为0
+		((PFILE_OBJECT)(pHandleFileObject))->SectionObjectPointer->ImageSectionObject = 0;
+
+		// 删除权限打开
+		((PFILE_OBJECT)(pHandleFileObject))->DeleteAccess = 1;
+
+		// 调用删除文件API
+		nStatus = ZwDeleteFile(&ObjectAttributes);
+		if (!NT_SUCCESS(nStatus))
+		{
+			return STATUS_UNSUCCESSFUL;
+		}
+	}
+	__finally
+	{
+		if (pHandleFileObject != NULL)
+		{
+			ObDereferenceObject(pHandleFileObject);
+			pHandleFileObject = NULL;
+		}
+
+		if (hFile != NULL || hFile != (PVOID)-1)
+		{
+			ZwClose(hFile);
+			hFile = (PVOID)-1;
+		}
+	}
+	return nStatus;
+}
+
 NTSTATUS IoControlHandler(PDEVICE_OBJECT DeviceObject, PIRP Irp)
 {
 	UNREFERENCED_PARAMETER(DeviceObject);
@@ -255,6 +340,18 @@ NTSTATUS IoControlHandler(PDEVICE_OBJECT DeviceObject, PIRP Irp)
 		{
 			nStatus = HandleProtectProcessRequest((PProtectProcessRequest)Irp->AssociatedIrp.SystemBuffer);
 			BytesReturned = sizeof(ProtectProcessRequest);
+		}
+		else
+		{
+			nStatus = STATUS_INFO_LENGTH_MISMATCH;
+			BytesReturned = 0;
+		}
+		break;
+	case IOCTL_Delete_File:
+		if (pStack->Parameters.DeviceIoControl.InputBufferLength == sizeof(DeleteFileRequest))
+		{
+			nStatus = HandleForceDeleteFileRequest((PDeleteFileRequest)Irp->AssociatedIrp.SystemBuffer);
+			BytesReturned = sizeof(DeleteFileRequest);
 		}
 		else
 		{
@@ -365,5 +462,6 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
 	DriverObject->Flags &= ~DO_DEVICE_INITIALIZING;
 
 	DbgPrintEx(99, 0, "+[HK]Load Success\n");
+
 	return nStatus;
 }
