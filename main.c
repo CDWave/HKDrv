@@ -204,7 +204,7 @@ NTSTATUS HandleReadWriteRequest(PReadWriteRequest Request)
 	return nStatus;
 }
 
-NTSTATUS HandleProtectProcessRequest(PProtectProcessRequest Request)
+NTSTATUS HandleProtectProcessRequest(PProcessRequest Request)
 {
 	if (!Request->ProcessId)
 	{
@@ -288,7 +288,6 @@ NTSTATUS HandleForceDeleteFileRequest(PDeleteFileRequest Request)
 		// 删除权限打开
 		((PFILE_OBJECT)(pHandleFileObject))->DeleteAccess = 1;
 
-		// 调用删除文件API
 		nStatus = ZwDeleteFile(&ObjectAttributes);
 		if (!NT_SUCCESS(nStatus))
 		{
@@ -312,11 +311,82 @@ NTSTATUS HandleForceDeleteFileRequest(PDeleteFileRequest Request)
 	return nStatus;
 }
 
+NTSTATUS HandleKillProcessRequest(PProcessRequest Request)
+{
+	NTSTATUS nStatus = STATUS_SUCCESS;
+	HANDLE Handle = NULL;
+	OBJECT_ATTRIBUTES ObjectAttributes;
+	CLIENT_ID ClientId = { 0 };
+
+	InitializeObjectAttributes(&ObjectAttributes, NULL, OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE, NULL, NULL);
+	ClientId.UniqueProcess = (HANDLE)Request->ProcessId;
+	ClientId.UniqueThread = 0;
+
+	// 打开进程
+	nStatus = ZwOpenProcess(&Handle, GENERIC_ALL, &ObjectAttributes, &ClientId);
+	if (!NT_SUCCESS(nStatus))
+	{
+		ZwClose(Handle);
+		return nStatus;
+	}
+
+	// 发送终止信号
+	ZwTerminateProcess(Handle, 0);
+	ZwClose(Handle);
+
+	return nStatus;
+}
+
+NTSTATUS HandleAllocFreeMemoryRequest(PAllocFreeMemoryRequest Request)
+{
+	NTSTATUS nStatus = STATUS_SUCCESS;
+	HANDLE Handle = NULL;
+	CLIENT_ID ClientId = { 0 };
+	OBJECT_ATTRIBUTES ObjectAttributes = { 0 };
+	PVOID BaseAddress = NULL;
+	ClientId.UniqueThread = 0;
+	ClientId.UniqueProcess = (HANDLE)Request->ProcessId;
+
+	__try
+	{
+		nStatus = ZwOpenProcess(&Handle, PROCESS_ALL_ACCESS, &ObjectAttributes, &ClientId);
+		if (!NT_SUCCESS(nStatus))
+		{
+			ZwClose(Handle);
+			return nStatus;
+		}
+		if (Request->Free)
+		{
+			BaseAddress = *(PVOID*)Request->Buffer;
+			nStatus = ZwFreeVirtualMemory(Handle, &BaseAddress, &Request->Size, MEM_RELEASE);
+		}
+		else
+		{
+			nStatus = ZwAllocateVirtualMemory(Handle, &BaseAddress, 0, &Request->Size, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+			*(PVOID*)Request->Buffer = BaseAddress;
+		}
+		
+		if (!NT_SUCCESS(nStatus))
+		{
+			ZwClose(Handle);
+			return nStatus;
+		}
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER)
+	{
+		ZwClose(Handle);
+		return nStatus;
+	}
+
+	ZwClose(Handle);
+	return nStatus;
+}
+
 NTSTATUS IoControlHandler(PDEVICE_OBJECT DeviceObject, PIRP Irp)
 {
 	UNREFERENCED_PARAMETER(DeviceObject);
 
-	NTSTATUS nStatus = 0;
+	NTSTATUS nStatus = STATUS_SUCCESS;
 	PIO_STACK_LOCATION pStack = IoGetCurrentIrpStackLocation(Irp);
 	ULONG IoCode = pStack->Parameters.DeviceIoControl.IoControlCode;
 	ULONG BytesReturned = 0;
@@ -335,11 +405,11 @@ NTSTATUS IoControlHandler(PDEVICE_OBJECT DeviceObject, PIRP Irp)
 			BytesReturned = 0;
 		}
 		break;
-	case IOCTL_Protect_PROCESS:
-		if (pStack->Parameters.DeviceIoControl.InputBufferLength == sizeof(ProtectProcessRequest))
+	case IOCTL_PROTECT_PROCESS:
+		if (pStack->Parameters.DeviceIoControl.InputBufferLength == sizeof(ProcessRequest))
 		{
-			nStatus = HandleProtectProcessRequest((PProtectProcessRequest)Irp->AssociatedIrp.SystemBuffer);
-			BytesReturned = sizeof(ProtectProcessRequest);
+			nStatus = HandleProtectProcessRequest((PProcessRequest)Irp->AssociatedIrp.SystemBuffer);
+			BytesReturned = sizeof(ProcessRequest);
 		}
 		else
 		{
@@ -347,11 +417,35 @@ NTSTATUS IoControlHandler(PDEVICE_OBJECT DeviceObject, PIRP Irp)
 			BytesReturned = 0;
 		}
 		break;
-	case IOCTL_Delete_File:
+	case IOCTL_DELETE_FILE:
 		if (pStack->Parameters.DeviceIoControl.InputBufferLength == sizeof(DeleteFileRequest))
 		{
 			nStatus = HandleForceDeleteFileRequest((PDeleteFileRequest)Irp->AssociatedIrp.SystemBuffer);
 			BytesReturned = sizeof(DeleteFileRequest);
+		}
+		else
+		{
+			nStatus = STATUS_INFO_LENGTH_MISMATCH;
+			BytesReturned = 0;
+		}
+		break;
+	case IOCTL_KILL_PROCESS:
+		if (pStack->Parameters.DeviceIoControl.InputBufferLength == sizeof(ProcessRequest))
+		{
+			nStatus = HandleKillProcessRequest((PProcessRequest)Irp->AssociatedIrp.SystemBuffer);
+			BytesReturned = sizeof(ProcessRequest);
+		}
+		else
+		{
+			nStatus = STATUS_INFO_LENGTH_MISMATCH;
+			BytesReturned = 0;
+		}
+		break;
+	case IOCTL_ALLOC_FREE_MEMORY:
+		if (pStack->Parameters.DeviceIoControl.InputBufferLength == sizeof(AllocFreeMemoryRequest))
+		{
+			nStatus = HandleAllocFreeMemoryRequest((PAllocFreeMemoryRequest)Irp->AssociatedIrp.SystemBuffer);
+			BytesReturned = sizeof(AllocFreeMemoryRequest);
 		}
 		else
 		{
@@ -462,6 +556,5 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
 	DriverObject->Flags &= ~DO_DEVICE_INITIALIZING;
 
 	DbgPrintEx(99, 0, "+[HK]Load Success\n");
-
 	return nStatus;
 }
